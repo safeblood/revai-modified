@@ -144,7 +144,7 @@ class OpenRouterClient:
             "messages": [{"role": "user", "content": prompt_text}],
             "stream": True,
         }
-        log_debug(f"generate_stream: model={model_name}, prompt_len={len(prompt_text)}, payload_len={len(json.dumps(payload))}")
+        log_debug(f"generate_stream: base_url={self.base_url}, model={model_name}, prompt_len={len(prompt_text)}, payload_len={len(json.dumps(payload))}")
         req = Request(
             f"{self.base_url}/chat/completions",
             data=json.dumps(payload).encode("utf-8"),
