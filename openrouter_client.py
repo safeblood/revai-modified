@@ -231,9 +231,13 @@ class OpenRouterClient:
                         log_debug("generate_stream: readline returned empty, breaking")
                         break
                     line_count += 1
+                    now = __import__("time").time()
                     if first_line_time is None:
-                        first_line_time = __import__("time").time()
+                        first_line_time = now
                         log_debug(f"generate_stream: first line received after {first_line_time - start_time:.2f}s")
+                    if line_count <= 5:
+                        preview = raw_line.decode("utf-8", errors="replace").strip()[:120]
+                        log_debug(f"generate_stream: line #{line_count} after {now - start_time:.2f}s: {preview}")
                     line = raw_line.decode("utf-8").strip()
                     if not line or not line.startswith("data: "):
                         continue
@@ -251,6 +255,8 @@ class OpenRouterClient:
                     delta = choices[0].get("delta", {})
                     content = delta.get("content")
                     if content:
+                        if token_count == 0:
+                            log_debug(f"generate_stream: first content after {now - start_time:.2f}s, content={content!r}")
                         full_text += content
                         on_token(content)
                         token_count += 1
