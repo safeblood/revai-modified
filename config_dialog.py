@@ -54,10 +54,30 @@ class ActionEditDialog(QDialog):
         self.prompt_edit = QPlainTextEdit(self.action.get("prompt_template", ""))
         self.prompt_edit.setMinimumHeight(120)
         self.prompt_edit.setPlaceholderText(
-            "Use {{FieldName}} to reference card fields.\n\n"
+            "Legacy fallback prompt. Use {{FieldName}} to reference card fields.\n\n"
             "Example: Explain the word {{Front}} and give an example sentence."
         )
-        form.addRow("Prompt Template:", self.prompt_edit)
+        form.addRow("Prompt Template (fallback):", self.prompt_edit)
+
+        self.prompt_correct_edit = QPlainTextEdit(
+            self.action.get("prompt_template_correct", "")
+        )
+        self.prompt_correct_edit.setMinimumHeight(120)
+        self.prompt_correct_edit.setPlaceholderText(
+            "Optional: prompt used when the typed answer is empty or matches the correct word.\n"
+            "Leave blank to use the fallback prompt above."
+        )
+        form.addRow("Prompt Template (correct spelling):", self.prompt_correct_edit)
+
+        self.prompt_incorrect_edit = QPlainTextEdit(
+            self.action.get("prompt_template_incorrect", "")
+        )
+        self.prompt_incorrect_edit.setMinimumHeight(120)
+        self.prompt_incorrect_edit.setPlaceholderText(
+            "Optional: prompt used when the typed answer differs from the correct word.\n"
+            "Leave blank to use the fallback prompt above."
+        )
+        form.addRow("Prompt Template (incorrect spelling):", self.prompt_incorrect_edit)
 
         layout.addLayout(form)
 
@@ -91,13 +111,20 @@ class ActionEditDialog(QDialog):
                 self.target_field_combo.setCurrentIndex(idx)
 
     def get_action_data(self):
-        return {
+        data = {
             "id": self.action.get("id") or str(uuid.uuid4()),
             "button_label": self.button_label_edit.text().strip(),
             "note_type_name": self.note_type_combo.currentText(),
             "target_field_name": self.target_field_combo.currentText().strip(),
             "prompt_template": self.prompt_edit.toPlainText().strip(),
         }
+        prompt_correct = self.prompt_correct_edit.toPlainText().strip()
+        if prompt_correct:
+            data["prompt_template_correct"] = prompt_correct
+        prompt_incorrect = self.prompt_incorrect_edit.toPlainText().strip()
+        if prompt_incorrect:
+            data["prompt_template_incorrect"] = prompt_incorrect
+        return data
 
 
 class ConfigDialog(QDialog):

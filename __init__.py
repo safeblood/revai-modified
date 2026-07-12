@@ -772,9 +772,34 @@ def _handle_ai_action(action_id):
     else:
         log_debug(f"handle_ai_action: using cached typedAnswer='{typed_answer}'")
 
+    # Select prompt template. If the action defines separate correct/incorrect
+    # templates, route based on the captured typed answer to eliminate
+    # conditional reasoning inside the model.
+    word_value = note.get("Word", "")
+    typed_lower = typed_answer.strip().lower()
+    correct_lower = word_value.strip().lower()
+    has_dual_prompts = (
+        action_config.get("prompt_template_correct")
+        or action_config.get("prompt_template_incorrect")
+    )
+    if has_dual_prompts:
+        if typed_lower and typed_lower != correct_lower:
+            chosen_template = action_config.get(
+                "prompt_template_incorrect", action_config.get("prompt_template", "")
+            )
+            log_debug("handle_ai_action: using prompt_template_incorrect")
+        else:
+            chosen_template = action_config.get(
+                "prompt_template_correct", action_config.get("prompt_template", "")
+            )
+            log_debug("handle_ai_action: using prompt_template_correct")
+    else:
+        chosen_template = action_config.get("prompt_template", "")
+        log_debug("handle_ai_action: using legacy prompt_template")
+
     # Build prompt from the currently reviewed note fields.
     note_data = {key: note[key] for key in note.keys()}
-    prompt = construct_prompt(action_config.get("prompt_template", ""), note_data)
+    prompt = construct_prompt(chosen_template, note_data)
 
     if not prompt.strip():
         _generating = False
