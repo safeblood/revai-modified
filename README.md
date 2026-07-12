@@ -14,7 +14,8 @@ This is a personal, private backup of the RevAI Anki plugin with local modificat
 3. **Connection reuse**: `OpenRouterClient` and `BackendClient` now reuse a single opener across requests to reduce TLS handshake overhead for subsequent requests.
 4. **WrongSpelling capture fix**: Improved typed-answer capture with DOM fallback for Anki's type-in-answer feature; WrongSpelling is cleared when the word is spelled correctly.
 5. **Clear previous analysis**: Clicking the AI button now clears the previous analysis before generating a new one.
-6. **UI toggle**: Added a "Stream output token-by-token" option in RevAI Config > Model Config.
+6. **Dual-prompt routing**: Actions can define separate prompts for "correct spelling" and "incorrect spelling". The plugin chooses the prompt before sending the request, so the model does not need to perform conditional reasoning.
+7. **UI toggle**: Added a "Stream output token-by-token" option in RevAI Config > Model Config.
 
 ## Files Changed
 
@@ -24,6 +25,7 @@ This is a personal, private backup of the RevAI Anki plugin with local modificat
 - `config_dialog.py`
 - `config.json`
 - `streaming_debug.py` (new)
+- `prompt_template_correct.txt` / `prompt_template_incorrect.txt` (example prompts)
 
 ## Usage
 
