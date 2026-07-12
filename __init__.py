@@ -816,6 +816,19 @@ def _handle_ai_action(action_id):
 
         # Build prompt from the currently reviewed note fields.
         note_data = {key: note[key] for key in note.keys()}
+
+        # Inject the captured typed answer into WrongSpelling so dictation
+        # prompts can see the user's actual spelling while generating.
+        if "WrongSpelling" in note_data:
+            typed_lower = typed_answer.strip().lower()
+            correct_lower = word_value.strip().lower()
+            if typed_answer and typed_lower != correct_lower:
+                note_data["WrongSpelling"] = typed_answer
+                log_debug(f"handle_ai_action: injected WrongSpelling='{typed_answer}'")
+            else:
+                note_data["WrongSpelling"] = ""
+                log_debug("handle_ai_action: cleared WrongSpelling (correct or empty)")
+
         prompt = construct_prompt(chosen_template, note_data)
 
         if not prompt.strip():
