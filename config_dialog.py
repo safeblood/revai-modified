@@ -268,6 +268,14 @@ class ConfigDialog(QDialog):
         direct_hint.setStyleSheet("color: gray; font-size: 11px;")
         direct_layout.addRow(direct_hint)
 
+        # Fetch models from the configured Direct API endpoint
+        direct_fetch_layout = QHBoxLayout()
+        self.direct_fetch_btn = QPushButton("Fetch Supported Models")
+        self.direct_fetch_btn.clicked.connect(self._fetch_direct_models)
+        direct_fetch_layout.addWidget(self.direct_fetch_btn)
+        direct_fetch_layout.addStretch()
+        direct_layout.addRow(direct_fetch_layout)
+
         tab_layout.addWidget(self.direct_widget)
         self.direct_widget.setVisible(current_mode == "direct")
 
@@ -278,6 +286,7 @@ class ConfigDialog(QDialog):
     # ----- Tab 2: Model Config -----
     def _build_model_tab(self):
         tab = QWidget()
+        self.model_tab = tab
         tab_layout = QVBoxLayout(tab)
         self.tabs.addTab(tab, "Model Config")
 
@@ -436,6 +445,36 @@ class ConfigDialog(QDialog):
         finally:
             self.fetch_btn.setText("Fetch Available Models")
             self.fetch_btn.setEnabled(True)
+
+    def _fetch_direct_models(self):
+        """Fetch available models from the Direct API endpoint currently entered in the form."""
+        url = self.direct_url_edit.text().strip()
+        if not url:
+            QMessageBox.warning(self, "Error", "Please enter the Direct API Base URL first.")
+            return
+
+        api_key = self.direct_key_edit.text().strip()
+        no_proxy = self.direct_no_proxy_check.isChecked()
+
+        self.direct_fetch_btn.setEnabled(False)
+        self.direct_fetch_btn.setText("Fetching...")
+        try:
+            client = OpenRouterClient(api_key, base_url=url, no_proxy=no_proxy)
+            models = client.get_models()
+            if models:
+                self._populate_models(models)
+                # Switch to Model Config tab so the user sees the list
+                model_tab_index = self.tabs.indexOf(self.model_tab)
+                if model_tab_index >= 0:
+                    self.tabs.setCurrentIndex(model_tab_index)
+                QMessageBox.information(self, "Done", f"Fetched {len(models)} models.")
+            else:
+                QMessageBox.warning(self, "Error", "No models returned. Check the URL and API key.")
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Failed to fetch models: {e}")
+        finally:
+            self.direct_fetch_btn.setText("Fetch Supported Models")
+            self.direct_fetch_btn.setEnabled(True)
 
     def _populate_models(self, models_data):
         self.model_combo.clear()
