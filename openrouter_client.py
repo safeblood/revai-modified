@@ -144,6 +144,7 @@ class OpenRouterClient:
             "messages": [{"role": "user", "content": prompt_text}],
             "stream": True,
         }
+        log_debug(f"generate_stream: model={model_name}, prompt_len={len(prompt_text)}, payload_len={len(json.dumps(payload))}")
         req = Request(
             f"{self.base_url}/chat/completions",
             data=json.dumps(payload).encode("utf-8"),
@@ -151,6 +152,7 @@ class OpenRouterClient:
             method="POST",
         )
 
+        start_time = __import__("time").time()
         try:
             response = self._opener.open(req, timeout=READ_TIMEOUT)
         except socket.timeout:
@@ -203,6 +205,9 @@ class OpenRouterClient:
                 # Some endpoints ignore stream=True and return a normal JSON body.
                 content_type = response.headers.get("Content-Type", "")
                 log_debug(f"generate_stream: status={response.status}, content-type={content_type}")
+                log_debug(f"generate_stream: starting SSE read loop")
+                first_line_time = None
+                line_count = 0
                 if "text/event-stream" not in content_type.lower():
                     log_debug("generate_stream: non-SSE response, falling back to JSON parse")
                     body = response.read().decode("utf-8")
@@ -221,6 +226,10 @@ class OpenRouterClient:
 
                 token_count = 0
                 for raw_line in response:
+                    line_count += 1
+                    if first_line_time is None:
+                        first_line_time = __import__("time").time()
+                        log_debug(f"generate_stream: first line received after {first_line_time - start_time:.2f}s")
                     line = raw_line.decode("utf-8").strip()
                     if not line or not line.startswith("data: "):
                         continue
@@ -244,7 +253,7 @@ class OpenRouterClient:
                     if choices[0].get("finish_reason"):
                         log_debug(f"generate_stream: finish_reason={choices[0].get('finish_reason')}")
                         break
-                log_debug(f"generate_stream: total tokens={token_count}, full_len={len(full_text)}")
+                log_debug(f"generate_stream: total lines={line_count}, tokens={token_count}, full_len={len(full_text)}")
         except socket.timeout:
             raise Exception(
                 "Request timed out while streaming. The model stopped responding. "
