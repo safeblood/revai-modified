@@ -193,7 +193,7 @@ def _build_buttons_html(actions, note, card_template=""):
         blocks.append(
             f'<div class="reviewai-action-block">'
             f'  <div class="reviewai-action-bar">'
-            f'    <button class="reviewai-btn" onclick="pycmd(\'reviewai_action:{aid}\')">'
+            f'    <button class="reviewai-btn" onclick="this.disabled=true;pycmd(\'reviewai_action:{aid}\')">'
             f'{label}</button>'
             f'    <button class="reviewai-btn-clear" style="display:{clear_display}" '
             f'      onclick="pycmd(\'reviewai_clear:{target_field}\')">Clear</button>'
