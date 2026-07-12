@@ -225,7 +225,11 @@ class OpenRouterClient:
                     return full_text
 
                 token_count = 0
-                for raw_line in response:
+                while True:
+                    raw_line = response.readline()
+                    if not raw_line:
+                        log_debug("generate_stream: readline returned empty, breaking")
+                        break
                     line_count += 1
                     if first_line_time is None:
                         first_line_time = __import__("time").time()
