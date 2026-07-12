@@ -667,278 +667,300 @@ def _handle_ai_action(action_id):
         return
     _generating = True
 
-    config = get_config()
-    if not config:
+    def _reset_state():
+        global _generating
         _generating = False
-        showWarning("RevAI configuration not found.", title="RevAI")
-        return
-
-    mode = config.get(CONFIG_MODE, "backend")
-
-    # Validate setup based on mode
-    if mode == "byok":
-        api_key = config.get(CONFIG_API_KEY)
-        model = config.get(CONFIG_DEFAULT_MODEL)
-        if not api_key:
-            _generating = False
-            showWarning("OpenRouter API Key is not configured.\n\n"
-                        "Go to Tools > RevAI Config > API Config.", title="RevAI")
-            return
-        if not model:
-            _generating = False
-            showWarning("No model selected.\n\n"
-                        "Go to Tools > RevAI Config > Model Config.", title="RevAI")
-            return
-    elif mode == "direct":
-        model = config.get(CONFIG_DEFAULT_MODEL)
-        if not model:
-            _generating = False
-            showWarning("No model selected.\n\n"
-                        "Go to Tools > RevAI Config > Model Config.", title="RevAI")
-            return
-    else:
-        if not is_authenticated(config):
-            _generating = False
-            _handle_login()
-            return
-
-    reviewer = mw.reviewer
-    if not reviewer or not reviewer.card:
-        _generating = False
-        showWarning("No card is currently being reviewed.", title="RevAI")
-        return
-
-    card = reviewer.card
-    note = card.note()
-    note_type_name = note.note_type()["name"]
-
-    # Find matching action
-    action_config = None
-    for a in config.get(CONFIG_REVIEWER_ACTIONS, []):
-        if a.get("id") == action_id:
-            if a.get("note_type_name") == note_type_name:
-                action_config = a
-            else:
-                _generating = False
-                tooltip(
-                    f"Action '{a.get('button_label')}' is for note type "
-                    f"'{a.get('note_type_name')}', not '{note_type_name}'.",
-                    period=3000,
-                )
-                return
-
-    if not action_config:
-        _generating = False
-        showWarning(f"Action '{action_id}' not found in configuration.", title="RevAI")
-        return
-
-    label = action_config.get("button_label", "")
-    tooltip(f"Generating '{label}'...", period=2000)
-
-    # Disable the buttons visually
-    try:
-        mw.reviewer.web.eval(
-            "document.querySelectorAll('.reviewai-btn').forEach(b => b.disabled = true);"
-        )
-    except Exception:
-        pass
-
-    note_id = note.id
-    target = action_config.get("target_field_name")
-
-    if target not in note.keys():
-        _generating = False
-        showWarning(
-            f"Field '{target}' not found on note type '{note_type_name}'.\n"
-            f"Create it in Anki via Manage Note Types first.",
-            title="RevAI",
-        )
-        return
-
-    # Capture the user's typed answer. Prefer the cached value captured when
-    # the answer side was shown; fall back to reading it directly from the reviewer
-    # or from the DOM.
-    typed_answer = _last_typed_answer
-    if not typed_answer:
         try:
-            typed_answer = reviewer.typedAnswer or ""
-            log_debug(f"handle_ai_action: fallback typedAnswer='{typed_answer}'")
-        except Exception as e:
-            log_debug(f"handle_ai_action: fallback typedAnswer failed: {e}")
-            typed_answer = ""
-    if not typed_answer:
-        typed_answer = _get_typed_answer_from_dom()
-        log_debug(f"handle_ai_action: DOM fallback typedAnswer='{typed_answer}'")
-    else:
-        log_debug(f"handle_ai_action: using cached typedAnswer='{typed_answer}'")
-
-    # Select prompt template. If the action defines separate correct/incorrect
-    # templates, route based on the captured typed answer to eliminate
-    # conditional reasoning inside the model.
-    try:
-        word_value = note["Word"] if "Word" in note.keys() else ""
-    except Exception:
-        word_value = ""
-    typed_lower = typed_answer.strip().lower()
-    correct_lower = word_value.strip().lower()
-    has_dual_prompts = bool(
-        action_config.get("prompt_template_correct")
-        or action_config.get("prompt_template_incorrect")
-    )
-    if has_dual_prompts:
-        if typed_lower and typed_lower != correct_lower:
-            chosen_template = action_config.get(
-                "prompt_template_incorrect", action_config.get("prompt_template", "")
-            )
-            log_debug("handle_ai_action: using prompt_template_incorrect")
-        else:
-            chosen_template = action_config.get(
-                "prompt_template_correct", action_config.get("prompt_template", "")
-            )
-            log_debug("handle_ai_action: using prompt_template_correct")
-    else:
-        chosen_template = action_config.get("prompt_template", "")
-        log_debug("handle_ai_action: using legacy prompt_template")
-
-    # Build prompt from the currently reviewed note fields.
-    note_data = {key: note[key] for key in note.keys()}
-    prompt = construct_prompt(chosen_template, note_data)
-
-    if not prompt.strip():
-        _generating = False
-        showWarning(
-            "Prompt is empty after field substitution. Check your prompt template.",
-            title="RevAI",
-        )
-        return
-
-    streaming_enabled = (
-        config.get(CONFIG_ENABLE_STREAMING, True)
-        and QThread is not None
-        and GenerationWorker is not None
-    )
-    log_debug(
-        f"handle_ai_action: mode={mode}, model={config.get(CONFIG_DEFAULT_MODEL)}, "
-        f"streaming_enabled={streaming_enabled}, QThread={QThread is not None}, "
-        f"GenerationWorker={GenerationWorker is not None}"
-    )
-
-    if streaming_enabled:
-        _start_streaming_worker(
-            mode, config, action_config, prompt, note_id, target, label, typed_answer
-        )
-        return
-
-    # -----------------------------------------------------------------------
-    # Non-streaming fallback path
-    # -----------------------------------------------------------------------
-    def background_op(col):
-        n = col.get_note(note_id)
-        if not n:
-            raise Exception(f"Note {note_id} not found.")
-
-        note_model = n.note_type()
-        field_names = col.models.field_names(note_model)
-        if target not in field_names:
-            raise Exception(
-                f"Field '{target}' not found on note type '{note_model['name']}'.\n"
-                f"Create it in Anki via Manage Note Types first."
-            )
-
-        # Auto-fill WrongSpelling from the typed answer for dictation cards.
-        if "WrongSpelling" in field_names:
-            try:
-                correct = n["Word"].strip().lower()
-            except Exception:
-                correct = ""
-            typed = typed_answer.strip().lower()
-            if typed and typed != correct:
-                n["WrongSpelling"] = typed_answer
-            else:
-                n["WrongSpelling"] = ""
-
-        # Call AI based on mode
-        if mode == "byok":
-            client = OpenRouterClient(config.get(CONFIG_API_KEY))
-            raw_response = client.generate(config.get(CONFIG_DEFAULT_MODEL), prompt)
-        elif mode == "direct":
-            base_url = config.get(CONFIG_DIRECT_API_URL, "http://127.0.0.1:8081/v1")
-            api_key = config.get(CONFIG_DIRECT_API_KEY, "")
-            no_proxy = config.get(CONFIG_DIRECT_API_NO_PROXY, True)
-            client = OpenRouterClient(api_key, base_url=base_url, no_proxy=no_proxy)
-            model = config.get(CONFIG_DEFAULT_MODEL, "")
-            # Direct endpoints (DeepSeek, local proxies, etc.) often use bare model
-            # names like "deepseek-v4-flash" rather than "provider/model".
-            if "/" in model:
-                model = model.split("/", 1)[1]
-            raw_response = client.generate(model, prompt)
-        else:
-            auth = config.get("auth", {})
-            client = BackendClient(auth.get("access_token"), auth.get("refresh_token"))
-            model = config.get(CONFIG_DEFAULT_MODEL)
-            raw_response, meta = client.generate(prompt, model=model if model else None)
-
-            # Save refreshed tokens if they changed
-            if client.access_token != auth.get("access_token"):
-                config["auth"]["access_token"] = client.access_token
-                config["auth"]["refresh_token"] = client.refresh_token
-                mw.addonManager.writeConfig(ADDON_PACKAGE, config)
-
-        # Convert markdown to HTML and store
-        html_content = markdown_to_html(raw_response)
-        n[target] = html_content
-        return col.update_note(n)
-
-    def on_success(op_changes):
-        _re_enable_buttons()
-        tooltip(f"'{target}' updated.", period=3000)
-        try:
-            if mw.reviewer:
-                mw.reviewer.refresh_if_needed()
+            _re_enable_buttons()
         except Exception:
             pass
 
-    def on_failure(exc):
-        _re_enable_buttons()
+    def _run():
+        config = get_config()
+        if not config:
+            _generating = False
+            showWarning("RevAI configuration not found.", title="RevAI")
+            return
 
-        # Unwrap Anki's exception wrapper if needed
-        actual_exc = exc
-        if hasattr(exc, '__cause__') and exc.__cause__:
-            actual_exc = exc.__cause__
+        mode = config.get(CONFIG_MODE, "backend")
 
-        if isinstance(actual_exc, CreditsExhaustedError):
-            showWarning(
-                "You've used all your free credits!\n\n"
-                "Options:\n"
-                "- Redeem a coupon code in RevAI Config\n"
-                "- Switch to 'Own API Key' mode with an OpenRouter key\n"
-                "- Wait for monthly credit reset (1st of each month)",
-                title="RevAI - No Credits",
+        # Validate setup based on mode
+        if mode == "byok":
+            api_key = config.get(CONFIG_API_KEY)
+            model = config.get(CONFIG_DEFAULT_MODEL)
+            if not api_key:
+                _generating = False
+                showWarning("OpenRouter API Key is not configured.\n\n"
+                            "Go to Tools > RevAI Config > API Config.", title="RevAI")
+                return
+            if not model:
+                _generating = False
+                showWarning("No model selected.\n\n"
+                            "Go to Tools > RevAI Config > Model Config.", title="RevAI")
+                return
+        elif mode == "direct":
+            model = config.get(CONFIG_DEFAULT_MODEL)
+            if not model:
+                _generating = False
+                showWarning("No model selected.\n\n"
+                            "Go to Tools > RevAI Config > Model Config.", title="RevAI")
+                return
+        else:
+            if not is_authenticated(config):
+                _generating = False
+                _handle_login()
+                return
+
+        reviewer = mw.reviewer
+        if not reviewer or not reviewer.card:
+            _generating = False
+            showWarning("No card is currently being reviewed.", title="RevAI")
+            return
+
+        card = reviewer.card
+        note = card.note()
+        note_type_name = note.note_type()["name"]
+
+        # Find matching action
+        action_config = None
+        for a in config.get(CONFIG_REVIEWER_ACTIONS, []):
+            if a.get("id") == action_id:
+                if a.get("note_type_name") == note_type_name:
+                    action_config = a
+                else:
+                    _generating = False
+                    tooltip(
+                        f"Action '{a.get('button_label')}' is for note type "
+                        f"'{a.get('note_type_name')}', not '{note_type_name}'.",
+                        period=3000,
+                    )
+                    return
+
+        if not action_config:
+            _generating = False
+            showWarning(f"Action '{action_id}' not found in configuration.", title="RevAI")
+            return
+
+        label = action_config.get("button_label", "")
+        tooltip(f"Generating '{label}'...", period=2000)
+
+        # Disable the buttons visually
+        try:
+            mw.reviewer.web.eval(
+                "document.querySelectorAll('.reviewai-btn').forEach(b => b.disabled = true);"
             )
-        elif isinstance(actual_exc, AuthError):
+        except Exception:
+            pass
+
+        note_id = note.id
+        target = action_config.get("target_field_name")
+
+        if target not in note.keys():
+            _generating = False
             showWarning(
-                f"Authentication error: {actual_exc}\n\n"
-                "Please sign in again via Tools > RevAI Config.",
+                f"Field '{target}' not found on note type '{note_type_name}'.\n"
+                f"Create it in Anki via Manage Note Types first.",
                 title="RevAI",
             )
-        elif isinstance(actual_exc, NetworkError):
-            showWarning(
-                f"Connection problem:\n{actual_exc}\n\n"
-                "Check your internet connection and try again.",
-                title="RevAI - Network Error",
-            )
-        else:
-            msg = str(actual_exc)
-            # Truncate very long error messages
-            if len(msg) > 500:
-                msg = msg[:500] + "..."
-            showWarning(f"AI generation failed:\n{msg}", title="RevAI")
-            print(f"RevAI: Generation error: {traceback.format_exc()}")
+            return
 
-    op = CollectionOp(parent=mw, op=background_op)
-    op.success(on_success)
-    op.failure(on_failure)
-    op.run_in_background()
+        # Capture the user's typed answer. Prefer the cached value captured when
+        # the answer side was shown; fall back to reading it directly from the reviewer
+        # or from the DOM.
+        typed_answer = _last_typed_answer
+        if not typed_answer:
+            try:
+                typed_answer = reviewer.typedAnswer or ""
+                log_debug(f"handle_ai_action: fallback typedAnswer='{typed_answer}'")
+            except Exception as e:
+                log_debug(f"handle_ai_action: fallback typedAnswer failed: {e}")
+                typed_answer = ""
+        if not typed_answer:
+            typed_answer = _get_typed_answer_from_dom()
+            log_debug(f"handle_ai_action: DOM fallback typedAnswer='{typed_answer}'")
+        else:
+            log_debug(f"handle_ai_action: using cached typedAnswer='{typed_answer}'")
+
+        # Select prompt template. If the action defines separate correct/incorrect
+        # templates, route based on the captured typed answer to eliminate
+        # conditional reasoning inside the model.
+        try:
+            word_value = note["Word"] if "Word" in note.keys() else ""
+        except Exception:
+            word_value = ""
+        typed_lower = typed_answer.strip().lower()
+        correct_lower = word_value.strip().lower()
+        has_dual_prompts = bool(
+            action_config.get("prompt_template_correct")
+            or action_config.get("prompt_template_incorrect")
+        )
+        if has_dual_prompts:
+            if typed_lower and typed_lower != correct_lower:
+                chosen_template = action_config.get(
+                    "prompt_template_incorrect", action_config.get("prompt_template", "")
+                )
+                log_debug("handle_ai_action: using prompt_template_incorrect")
+            else:
+                chosen_template = action_config.get(
+                    "prompt_template_correct", action_config.get("prompt_template", "")
+                )
+                log_debug("handle_ai_action: using prompt_template_correct")
+        else:
+            chosen_template = action_config.get("prompt_template", "")
+            log_debug("handle_ai_action: using legacy prompt_template")
+
+        # Build prompt from the currently reviewed note fields.
+        note_data = {key: note[key] for key in note.keys()}
+        prompt = construct_prompt(chosen_template, note_data)
+
+        if not prompt.strip():
+            _generating = False
+            showWarning(
+                "Prompt is empty after field substitution. Check your prompt template.",
+                title="RevAI",
+            )
+            return
+
+        streaming_enabled = (
+            config.get(CONFIG_ENABLE_STREAMING, True)
+            and QThread is not None
+            and GenerationWorker is not None
+        )
+        log_debug(
+            f"handle_ai_action: mode={mode}, model={config.get(CONFIG_DEFAULT_MODEL)}, "
+            f"streaming_enabled={streaming_enabled}, QThread={QThread is not None}, "
+            f"GenerationWorker={GenerationWorker is not None}"
+        )
+
+        if streaming_enabled:
+            _start_streaming_worker(
+                mode, config, action_config, prompt, note_id, target, label, typed_answer
+            )
+            return
+
+        # -----------------------------------------------------------------------
+        # Non-streaming fallback path
+        # -----------------------------------------------------------------------
+        def background_op(col):
+            n = col.get_note(note_id)
+            if not n:
+                raise Exception(f"Note {note_id} not found.")
+
+            note_model = n.note_type()
+            field_names = col.models.field_names(note_model)
+            if target not in field_names:
+                raise Exception(
+                    f"Field '{target}' not found on note type '{note_model['name']}'.\n"
+                    f"Create it in Anki via Manage Note Types first."
+                )
+
+            # Auto-fill WrongSpelling from the typed answer for dictation cards.
+            if "WrongSpelling" in field_names:
+                try:
+                    correct = n["Word"].strip().lower()
+                except Exception:
+                    correct = ""
+                typed = typed_answer.strip().lower()
+                if typed and typed != correct:
+                    n["WrongSpelling"] = typed_answer
+                else:
+                    n["WrongSpelling"] = ""
+
+            # Call AI based on mode
+            if mode == "byok":
+                client = OpenRouterClient(config.get(CONFIG_API_KEY))
+                raw_response = client.generate(config.get(CONFIG_DEFAULT_MODEL), prompt)
+            elif mode == "direct":
+                base_url = config.get(CONFIG_DIRECT_API_URL, "http://127.0.0.1:8081/v1")
+                api_key = config.get(CONFIG_DIRECT_API_KEY, "")
+                no_proxy = config.get(CONFIG_DIRECT_API_NO_PROXY, True)
+                client = OpenRouterClient(api_key, base_url=base_url, no_proxy=no_proxy)
+                model = config.get(CONFIG_DEFAULT_MODEL, "")
+                # Direct endpoints (DeepSeek, local proxies, etc.) often use bare model
+                # names like "deepseek-v4-flash" rather than "provider/model".
+                if "/" in model:
+                    model = model.split("/", 1)[1]
+                raw_response = client.generate(model, prompt)
+            else:
+                auth = config.get("auth", {})
+                client = BackendClient(auth.get("access_token"), auth.get("refresh_token"))
+                model = config.get(CONFIG_DEFAULT_MODEL)
+                raw_response, meta = client.generate(prompt, model=model if model else None)
+
+                # Save refreshed tokens if they changed
+                if client.access_token != auth.get("access_token"):
+                    config["auth"]["access_token"] = client.access_token
+                    config["auth"]["refresh_token"] = client.refresh_token
+                    mw.addonManager.writeConfig(ADDON_PACKAGE, config)
+
+            # Convert markdown to HTML and store
+            html_content = markdown_to_html(raw_response)
+            n[target] = html_content
+            return col.update_note(n)
+
+        def on_success(op_changes):
+            _re_enable_buttons()
+            tooltip(f"'{target}' updated.", period=3000)
+            try:
+                if mw.reviewer:
+                    mw.reviewer.refresh_if_needed()
+            except Exception:
+                pass
+
+        def on_failure(exc):
+            _re_enable_buttons()
+
+            # Unwrap Anki's exception wrapper if needed
+            actual_exc = exc
+            if hasattr(exc, '__cause__') and exc.__cause__:
+                actual_exc = exc.__cause__
+
+            if isinstance(actual_exc, CreditsExhaustedError):
+                showWarning(
+                    "You've used all your free credits!\n\n"
+                    "Options:\n"
+                    "- Redeem a coupon code in RevAI Config\n"
+                    "- Switch to 'Own API Key' mode with an OpenRouter key\n"
+                    "- Wait for monthly credit reset (1st of each month)",
+                    title="RevAI - No Credits",
+                )
+            elif isinstance(actual_exc, AuthError):
+                showWarning(
+                    f"Authentication error: {actual_exc}\n\n"
+                    "Please sign in again via Tools > RevAI Config.",
+                    title="RevAI",
+                )
+            elif isinstance(actual_exc, NetworkError):
+                showWarning(
+                    f"Connection problem:\n{actual_exc}\n\n"
+                    "Check your internet connection and try again.",
+                    title="RevAI - Network Error",
+                )
+            else:
+                msg = str(actual_exc)
+                # Truncate very long error messages
+                if len(msg) > 500:
+                    msg = msg[:500] + "..."
+                showWarning(f"AI generation failed:\n{msg}", title="RevAI")
+                print(f"RevAI: Generation error: {traceback.format_exc()}")
+
+        op = CollectionOp(parent=mw, op=background_op)
+        op.success(on_success)
+        op.failure(on_failure)
+        op.run_in_background()
+
+
+
+    try:
+        return _run()
+    except Exception as _e:
+        log_debug(f"handle_ai_action: unhandled exception: {traceback.format_exc()}")
+        try:
+            showWarning("RevAI encountered an error:\n" + str(_e)[:500], title="RevAI")
+        except Exception:
+            pass
+    finally:
+        _reset_state()
 
 
 def _handle_clear_field(field_name):
@@ -997,6 +1019,7 @@ mw.addonManager.setConfigAction(ADDON_PACKAGE, show_config_dialog)
 # Default config on profile load
 # ---------------------------------------------------------------------------
 def on_profile_loaded():
+    log_debug(f"RevAI plugin loaded at {time.strftime('%Y-%m-%d %H:%M:%S')}")
     try:
         current = mw.addonManager.getConfig(ADDON_PACKAGE)
         if current is None:
