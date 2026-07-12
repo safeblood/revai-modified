@@ -89,6 +89,7 @@ INJECTED_CSS = """
 }
 .reviewai-content ul { padding-left: 1.3em; margin: 0.3em 0; }
 .reviewai-content p { margin: 0.3em 0; }
+.reviewai-streaming { white-space: pre-wrap; }
 .reviewai-login-prompt {
     text-align: center; margin: 15px 0; padding: 12px;
     background: rgba(0,0,0,0.04); border-radius: 10px;
@@ -470,12 +471,16 @@ def _get_typed_answer_from_dom():
 
 
 def _update_streaming_content(action_id, accumulated_text):
-    """Render the accumulated markdown as HTML in the streaming content area."""
+    """Show the raw accumulated text in the streaming area while tokens arrive.
+
+    Markdown is only rendered once at the end (_finalize_streaming_content).
+    Rendering incomplete markdown during streaming produces broken symbols and
+    prevents the smooth, character-by-character effect.
+    """
     try:
         if not mw.reviewer or not mw.reviewer.web:
             log_debug("_update_streaming_content: no reviewer/web")
             return
-        html_content = markdown_to_html(accumulated_text)
         js = (
             "(function(){"
             f"var el=document.getElementById('reviewai-streaming-{action_id}');"
@@ -484,7 +489,7 @@ def _update_streaming_content(action_id, accumulated_text):
             "}"
             "if(!el)return;"
             "el.style.display='block';"
-            f"el.innerHTML={_escape_js_string(html_content)};"
+            f"el.textContent={_escape_js_string(accumulated_text)};"
             "})();"
         )
         mw.reviewer.web.eval(js)
