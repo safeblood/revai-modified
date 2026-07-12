@@ -397,15 +397,18 @@ def on_webview_message(handled_tuple, message, context):
 
     if message.startswith("reviewai_action:"):
         action_id = message.split(":", 1)[1]
+        log_debug(f"on_webview_message: received reviewai_action:{action_id}")
         _handle_ai_action(action_id)
         return (True, None)
 
     if message.startswith("reviewai_clear:"):
         field_name = message.split(":", 1)[1]
+        log_debug(f"on_webview_message: received reviewai_clear:{field_name}")
         _handle_clear_field(field_name)
         return (True, None)
 
     if message == "reviewai_login":
+        log_debug("on_webview_message: received reviewai_login")
         _handle_login()
         return (True, None)
 
