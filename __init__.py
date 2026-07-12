@@ -775,10 +775,13 @@ def _handle_ai_action(action_id):
     # Select prompt template. If the action defines separate correct/incorrect
     # templates, route based on the captured typed answer to eliminate
     # conditional reasoning inside the model.
-    word_value = note.get("Word", "")
+    try:
+        word_value = note["Word"] if "Word" in note.keys() else ""
+    except Exception:
+        word_value = ""
     typed_lower = typed_answer.strip().lower()
     correct_lower = word_value.strip().lower()
-    has_dual_prompts = (
+    has_dual_prompts = bool(
         action_config.get("prompt_template_correct")
         or action_config.get("prompt_template_incorrect")
     )
