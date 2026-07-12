@@ -1,0 +1,11 @@
+# Backups
+*.bak.*
+
+# Runtime/generated
+__pycache__/
+*.pyc
+*.pyo
+streaming_debug.log
+
+# Anki user config / metadata (contains API keys, tokens)
+meta.json

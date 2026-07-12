@@ -1,0 +1,15 @@
+{
+    "mode": "backend",
+    "openrouter_api_key": "",
+    "direct_api_url": "http://127.0.0.1:8081/v1",
+    "direct_api_key": "",
+    "direct_api_no_proxy": true,
+    "default_model": "",
+    "enable_streaming": true,
+    "reviewer_actions": [],
+    "auth": {
+        "access_token": "",
+        "refresh_token": "",
+        "email": ""
+    }
+}
